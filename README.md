@@ -77,3 +77,4 @@ Open [http://localhost:3000](http://localhost:3000) for the public portal, or [h
 
 ## 📄 License
 This project is proprietary and built for NetRwandaFilms.
+
