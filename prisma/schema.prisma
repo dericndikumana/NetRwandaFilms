@@ -1,0 +1,231 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  SUPER_ADMIN
+  EDITOR
+  USER
+}
+
+enum LicenseStatus {
+  LICENSED
+  EXPIRED
+  PENDING_REVIEW
+  REVOKED
+}
+
+enum KinyarwandaType {
+  NONE
+  AUDIO_TRACK
+  SEPARATE_VIDEO
+}
+
+enum ReportStatus {
+  PENDING
+  IN_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+model User {
+  id            String          @id @default(cuid())
+  name          String?
+  email         String          @unique
+  passwordHash  String
+  role          Role            @default(USER)
+  image         String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  favorites     Favorite[]
+  watchProgress WatchProgress[]
+  comments      Comment[]
+
+  @@map("users")
+}
+
+model Movie {
+  id                  String          @id @default(cuid())
+  title               String
+  titleRw             String?
+  slug                String          @unique
+  synopsis            String          @db.Text
+  synopsisRw          String?         @db.Text
+  releaseYear         Int
+  durationMinutes     Int
+  ageRating           String          @default("13+") // PG, 13+, 16+, 18+
+  
+  // Media Assets (Stored on Cloudflare R2 / S3)
+  posterUrl           String          // Portrait card poster
+  bannerUrl           String          // Wide hero banner
+  trailerUrl          String?         // Teaser / trailer video or YouTube link
+  
+  // Video Sources (HLS .m3u8 or MP4 direct)
+  videoUrl            String          // Primary English master video
+  videoKey            String?         // R2 storage key for primary file
+  video480pUrl        String?         // 480p resolution stream
+  video720pUrl        String?         // 720p resolution stream
+  video1080pUrl       String?         // 1080p resolution stream
+  subtitlesUrl        String?         // English WebVTT subtitles
+  subtitlesRwUrl      String?         // Kinyarwanda WebVTT subtitles
+
+  // Kinyarwanda Dual-Language Support
+  hasKinyarwanda      Boolean         @default(false)
+  kinyarwandaType     KinyarwandaType @default(NONE)
+  kinyarwandaAudioUrl String?         // Second audio track for bilingual player
+  kinyarwandaVideoUrl String?         // Separate dubbed video stream
+
+  // Legal & Licensing Rights (Optional)
+  licenseStatus       LicenseStatus   @default(LICENSED)
+  licenseOwner        String?         // Name of producer, studio or owner (optional)
+  licenseContact      String?         // Owner email/phone for verification (optional)
+  licenseStart        DateTime?       // Start date (optional)
+  licenseExpires      DateTime?       // Expiry date (optional; auto-hides only if set and past)
+  licenseNotes        String?         @db.Text
+  licenseDocUrl       String?         // Uploaded scanned permission/contract (optional)
+
+  // Publishing & Metrics
+  isPublished         Boolean         @default(true)
+  viewsCount          Int             @default(0)
+  storageBytes        BigInt          @default(0)
+  bandwidthBytes      BigInt          @default(0)
+  isFeatured          Boolean         @default(false)
+  featuredOrder       Int             @default(0)
+
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  // Relationships
+  categories          Category[]
+  favorites           Favorite[]
+  watchProgress       WatchProgress[]
+  comments            Comment[]
+  reports             CopyrightReport[]
+  featuredBanners     FeaturedBanner[]
+
+  @@index([licenseExpires, licenseStatus, isPublished])
+  @@index([slug])
+  @@map("movies")
+}
+
+model Category {
+  id           String   @id @default(cuid())
+  name         String   // e.g. "Action", "Drama", "Rwandan Cinema"
+  nameRw       String   // e.g. "Filime z'Ibyamamare", "Ikinamico", "Filime Nyarwanda"
+  slug         String   @unique
+  description  String?
+  displayOrder Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  movies       Movie[]
+
+  @@map("categories")
+}
+
+model FeaturedBanner {
+  id          String   @id @default(cuid())
+  movieId     String
+  movie       Movie    @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  title       String?  // Custom title override
+  titleRw     String?  // Custom Kinyarwanda title override
+  tagline     String?  // Highlight badge / tagline
+  taglineRw   String?
+  imageUrl    String?  // Custom banner image override
+  isActive    Boolean  @default(true)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("featured_banners")
+}
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movieId   String
+  movie     Movie    @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, movieId])
+  @@map("favorites")
+}
+
+model WatchProgress {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movieId         String
+  movie           Movie    @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  progressSeconds Int      @default(0)
+  durationSeconds Int      @default(0)
+  language        String   @default("en") // "en" or "rw"
+  completed       Boolean  @default(false)
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, movieId])
+  @@map("watch_progress")
+}
+
+model Comment {
+  id         String   @id @default(cuid())
+  movieId    String
+  movie      Movie    @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userName   String   // Guest or user name
+  content    String   @db.Text
+  isApproved Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([movieId, isApproved])
+  @@map("comments")
+}
+
+model CopyrightReport {
+  id               String       @id @default(cuid())
+  movieId          String
+  movie            Movie        @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  reporterName     String
+  reporterEmail    String
+  rightsOwnerProof String       @db.Text
+  description      String       @db.Text
+  status           ReportStatus @default(PENDING)
+  adminNotes       String?      @db.Text
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@map("copyright_reports")
+}
+
+model SiteSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String   @db.Text
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("site_settings")
+}
+
+model DailyMetric {
+  id             String   @id @default(cuid())
+  date           DateTime @unique @db.Date
+  views          Int      @default(0)
+  uniqueVisitors Int      @default(0)
+  bandwidthBytes BigInt   @default(0)
+  storageBytes   BigInt   @default(0)
+  createdAt      DateTime @default(now())
+
+  @@map("daily_metrics")
+}
+
